@@ -992,6 +992,10 @@ var ItemTree = class ItemTree extends LibraryTree {
 		];
 	}
 	
+	/**
+	 * @param {ICollectionTreeRow} collectionTreeRow
+	 * @return {Promise<void>}
+	 */
 	async changeCollectionTreeRow(collectionTreeRow) {
 		if (this._locked) return;
 		if (!collectionTreeRow) {

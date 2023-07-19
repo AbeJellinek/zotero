@@ -63,23 +63,11 @@ var ZoteroAdvancedSearch = new function() {
 			columns: getDefaultColumnsByDataKeys(['title', 'firstCreator']),
 		});
 
-		// A minimal implementation of Zotero.CollectionTreeRow
-		var collectionTreeRow = {
-			view: {},
+		var collectionTreeRow = Zotero.CollectionTreeRow.createMinimalRow({
 			ref: _searchBox.search,
 			isSearchMode: () => true,
-			getItems: async () => [],
-			isLibrary: () => false,
-			isCollection: () => false,
-			isSearch: () => true,
-			isPublications: () => false,
-			isDuplicates: () => false,
-			isFeed: () => false,
-			isFeeds: () => false,
-			isFeedsOrFeed: () => false,
-			isShare: () => false,
-			isTrash: () => false
-		};
+			isSearch: () => true
+		});
 
 		this.itemsView.changeCollectionTreeRow(collectionTreeRow);
 	}
@@ -92,30 +80,19 @@ var ZoteroAdvancedSearch = new function() {
 		_searchBox.updateSearch();
 		_searchBox.active = true;
 		
-		// A minimal implementation of Zotero.CollectionTreeRow
-		var collectionTreeRow = {
-			view: {},
+		var collectionTreeRow = Zotero.CollectionTreeRow.createMinimalRow({
 			ref: _searchBox.search,
 			isSearchMode: () => true,
-			getItems: async function () {
+			isSearch: () => true,
+			getItems: async () => {
 				await Zotero.Libraries.get(_libraryID).waitForDataLoad('item');
 
 				var search = _searchBox.search.clone();
 				search.libraryID = _libraryID;
 				var ids = await search.search();
 				return Zotero.Items.get(ids);
-			},
-			isLibrary: () => false,
-			isCollection: () => false,
-			isSearch: () => true,
-			isPublications: () => false,
-			isDuplicates: () => false,
-			isFeed: () => false,
-			isFeeds: () => false,
-			isFeedsOrFeed: () => false,
-			isShare: () => false,
-			isTrash: () => false
-		};
+			}
+		});
 		
 		this.itemsView.changeCollectionTreeRow(collectionTreeRow);
 	}

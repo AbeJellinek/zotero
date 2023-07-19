@@ -25,6 +25,54 @@
 
 "use strict";
 
+/**
+ * @interface ICollectionTreeRow
+ * @template Ref
+ * @property {import('../itemTree').ItemTree | {}} view
+ * @property {Ref} ref
+ * @property {() => boolean} isSearchMode
+ * @property {() => Promise<Zotero.Item[]>} getItems
+ * @property {() => boolean} isLibrary
+ * @property {() => boolean} isCollection
+ * @property {() => boolean} isSearch
+ * @property {() => boolean} isPublications
+ * @property {() => boolean} isDuplicates
+ * @property {() => boolean} isFeed
+ * @property {() => boolean} isFeeds
+ * @property {() => boolean} isFeedsOrFeed
+ * @property {() => boolean} isShare
+ * @property {() => boolean} isTrash
+ * @property {() => boolean} isUnfiled
+ */
+
+/**
+ * @typedef {
+ *     | 'library'
+ *     | 'group'
+ *     | 'feed'
+ *     | 'feeds'
+ *     | 'collection'
+ *     | 'search'
+ *     | 'duplicates'
+ *     | 'unfiled'
+ *     | 'retracted'
+ *     | 'publications'
+ *     | 'trash'
+ *     | 'header'
+ * } CollectionTreeRowType
+ */
+
+/**
+ * @class
+ * @template Ref
+ * @implements ICollectionTreeRow<Ref>
+ * @param {import('../itemTree').ItemTree} collectionTreeView
+ * @param {CollectionTreeRowType} type
+ * @param {Ref} ref
+ * @param {number} level
+ * @param {boolean} isOpen
+ * @constructor
+ */
 Zotero.CollectionTreeRow = function (collectionTreeView, type, ref, level, isOpen) {
 	this.view = collectionTreeView;
 	this.type = type;
@@ -35,6 +83,35 @@ Zotero.CollectionTreeRow = function (collectionTreeView, type, ref, level, isOpe
 }
 
 Zotero.CollectionTreeRow.IDCounter = 0;
+
+/**
+ * Create a minimal ICollectionTreeRow implementation with default implementations for required getters.
+ *
+ * @template Ref
+ * @param {Partial<ICollectionTreeRow<Ref> & { ref: Ref }>} props
+ * @return {ICollectionTreeRow}
+ */
+Zotero.CollectionTreeRow.createMinimalRow = function (props) {
+	return {
+		view: {},
+		isSearchMode: () => false,
+		getItems: async () => [],
+		isLibrary: () => false,
+		isCollection: () => false,
+		isSearch: () => false,
+		isPublications: () => false,
+		isDuplicates: () => false,
+		isFeed: () => false,
+		isFeeds: () => false,
+		isFeedsOrFeed() {
+			return this.isFeeds() || this.isFeed();
+		},
+		isShare: () => false,
+		isTrash: () => false,
+		isUnfiled: () => false,
+		...props
+	};
+};
 
 
 Zotero.CollectionTreeRow.prototype.__defineGetter__('id', function () {
