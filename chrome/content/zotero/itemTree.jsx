@@ -76,6 +76,7 @@ var ItemTree = class ItemTree extends LibraryTree {
 		onContextMenu: PropTypes.func,
 		onActivate: PropTypes.func,
 		emptyMessage: PropTypes.string,
+		getExtraRowData: PropTypes.func,
 	};
 	
 	constructor(props) {
@@ -3011,6 +3012,13 @@ var ItemTree = class ItemTree extends LibraryTree {
 		row.feed = (treeRow.ref.isFeedItem && Zotero.Feeds.get(treeRow.ref.libraryID).name) || "";
 		row.title = treeRow.ref.getDisplayTitle();
 		
+		if (this.props.getExtraRowData) {
+			let extraRowData = this.props.getExtraRowData(treeRow);
+			if (extraRowData) {
+				Object.assign(row, extraRowData);
+			}
+		}
+
 		const columns = this.getColumns();
 		for (let col of columns) {
 			let key = col.dataKey;
