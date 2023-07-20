@@ -41,12 +41,14 @@ Zotero.Utilities.Internal = {
 	/**
 	 * Run a function on chunks of a given size of an array's elements.
 	 *
+	 * @template T
+	 * @template R
 	 * @param {Array} arr
 	 * @param {Integer} chunkSize
-	 * @param {Function} func - A promise-returning function
-	 * @return {Array} The return values from the successive runs
+	 * @param {((chunk: T[]) => Promise<R>)} func - A promise-returning function
+	 * @return {Promise<R[]>} The return values from the successive runs
 	 */
-	"forEachChunkAsync": async function (arr, chunkSize, func) {
+	forEachChunkAsync: async function (arr, chunkSize, func) {
 		var retValues = [];
 		var tmpArray = arr.concat();
 		var num = arr.length;
