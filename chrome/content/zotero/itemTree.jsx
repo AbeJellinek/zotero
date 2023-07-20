@@ -1060,6 +1060,14 @@ var ItemTree = class ItemTree extends LibraryTree {
 		});
 	}
 	
+	invalidateCacheAndRedraw(itemID) {
+		delete this._rowCache[itemID];
+		let row = this._rowMap[itemID];
+		if (row !== undefined && this.tree) {
+			this.tree.invalidateRow(row);
+		}
+	}
+	
 	async selectItem(id, noRecurse) {
 		return this.selectItems([id], noRecurse);
 	}
