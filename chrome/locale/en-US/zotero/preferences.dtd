@@ -37,7 +37,7 @@
 <!ENTITY zotero.preferences.reader.tabsTitle.filename          "Filename">
 
 <!ENTITY zotero.preferences.groups						"Groups">
-<!ENTITY zotero.preferences.groups.whenCopyingInclude	"When copying items between libraries, include:">
+<!ENTITY zotero.preferences.groups.whenCopyingInclude	"When copying items between libraries, by default include:">
 <!ENTITY zotero.preferences.groups.childNotes			"child notes">
 <!ENTITY zotero.preferences.groups.childFiles			"child snapshots and imported files">
 <!ENTITY zotero.preferences.groups.annotations        "annotations">

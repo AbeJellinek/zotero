@@ -1,0 +1,75 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<?xml-stylesheet href="chrome://zotero/skin/zotero.css" type="text/css"?>
+<?xml-stylesheet href="chrome://zotero/skin/overlay.css" type="text/css"?>
+<?xml-stylesheet href="chrome://zotero-platform/content/overlay.css" type="text/css"?>
+<?xml-stylesheet href="chrome://zotero-platform/content/zotero.css"?>
+<?xml-stylesheet href="chrome://zotero/skin/copyDialog.css" type="text/css"?>
+
+<!DOCTYPE bindings SYSTEM "chrome://zotero/locale/zotero.dtd">
+
+<window
+		title="&zotero.copyDialog.title;"
+		xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+		xmlns:html="http://www.w3.org/1999/xhtml"
+		style="display: flex; width: 800px; height: 500px">
+	<dialog
+			id="copy-dialog"
+			buttons="cancel,accept">
+		<script>
+			var { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+			Services.scriptloader.loadSubScript("chrome://zotero/content/include.js", this);
+			Services.scriptloader.loadSubScript("chrome://zotero/content/copyDialog.js", this);
+		</script>
+
+		<hbox id="zotero-items-pane-content" class="virtualized-table-container" flex="1">
+			<html:div id="zotero-items-tree"/>
+		</hbox>
+		
+		<hbox>
+			<checkbox
+				id="overwrite-existing-items-checkbox"
+				label="&zotero.copyDialog.overwriteExistingItems;" 
+				native="true"/>
+			<spacer flex="1"/>
+			<button id="toggle-selected"/>
+			<button id="toggle-by-type"/>
+
+			<panel id="toggle-by-type-panel">
+				<vbox>
+					<!-- These need to be HTML checkboxes - XUL checkboxes don't support the indeterminate state -->
+					<box>
+						<html:label>
+							<html:input type="checkbox" id="notes-checkbox"/>
+							&zotero.copyDialog.toggleByType.notes;
+						</html:label>
+					</box>
+					<box>
+						<html:label>
+							<html:input type="checkbox" id="files-checkbox"/>
+							&zotero.copyDialog.toggleByType.files;
+						</html:label>
+					</box>
+					<box>
+						<html:label>
+							<html:input type="checkbox" id="child-links-checkbox"/>
+							&zotero.copyDialog.toggleByType.childLinks;
+						</html:label>
+					</box>
+					<box>
+						<html:label>
+							<html:input type="checkbox" id="annotations-checkbox"/>
+							&zotero.copyDialog.toggleByType.annotations;
+						</html:label>
+					</box>
+					<box>
+						<html:label>
+							<html:input type="checkbox" id="tags-checkbox"/>
+							&zotero.copyDialog.toggleByType.tags;
+						</html:label>
+					</box>
+				</vbox>
+			</panel>
+		</hbox>
+	</dialog>
+</window>

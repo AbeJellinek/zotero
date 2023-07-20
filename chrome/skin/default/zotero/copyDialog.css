@@ -1,0 +1,11 @@
+#toggle-by-type-panel {
+	padding: 5px 10px;
+}
+
+.virtualized-table .row.context-row {
+	color: #888;
+}
+
+.virtualized-table .row.context-row.selected:not(.highlighted) {
+	 color: color-mix(in srgb, SelectedItemText 80%, gray);
+ }

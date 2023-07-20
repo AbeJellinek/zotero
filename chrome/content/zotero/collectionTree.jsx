@@ -1547,18 +1547,13 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 		var sourceTreeRow = Zotero.DragDrop.getDragSource(dataTransfer);
 		var targetTreeRow = treeRow;
 		
-		var copyOptions = {
-			tags: Zotero.Prefs.get('groups.copyTags'),
-			childNotes: Zotero.Prefs.get('groups.copyChildNotes'),
-			childLinks: Zotero.Prefs.get('groups.copyChildLinks'),
-			childFileAttachments: Zotero.Prefs.get('groups.copyChildFileAttachments'),
-			annotations: Zotero.Prefs.get('groups.copyAnnotations'),
-		};
 		var copyItem = async function (item, targetLibraryID, options) {
-			var targetLibraryType = Zotero.Libraries.get(targetLibraryID).libraryType;
-			
+			let excludedItemIDs = options.excludedItemIDs;
+			if (excludedItemIDs.has(item.id)) {
+				return false;
+			}
 			// Check if there's already a copy of this item in the library
-			var linkedItem = await item.getLinkedItem(targetLibraryID, true);
+			let linkedItem = await item.getLinkedItem(targetLibraryID, true);
 			if (linkedItem) {
 				// If linked item is in the trash, undelete it and remove it from collections
 				// (since it shouldn't be restored to previous collections)
@@ -1569,44 +1564,8 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 						skipSelect: true
 					});
 				}
-				return linkedItem.id;
-				
-				/*
-				// TODO: support tags, related, attachments, etc.
-				
-				// Overlay source item fields on unsaved clone of linked item
-				var newItem = item.clone(false, linkedItem.clone(true));
-				newItem.setField('dateAdded', item.dateAdded);
-				newItem.setField('dateModified', item.dateModified);
-				
-				var diff = newItem.diff(linkedItem, false, ["dateAdded", "dateModified"]);
-				if (!diff) {
-					// Check if creators changed
-					var creatorsChanged = false;
-					
-					var creators = item.getCreators();
-					var linkedCreators = linkedItem.getCreators();
-					if (creators.length != linkedCreators.length) {
-						Zotero.debug('Creators have changed');
-						creatorsChanged = true;
-					}
-					else {
-						for (var i=0; i<creators.length; i++) {
-							if (!creators[i].ref.equals(linkedCreators[i].ref)) {
-								Zotero.debug('changed');
-								creatorsChanged = true;
-								break;
-							}
-						}
-					}
-					if (!creatorsChanged) {
-						Zotero.debug("Linked item hasn't changed -- skipping conflict resolution");
-						continue;
-					}
-				}
-				toReconcile.push([newItem, linkedItem]);
-				continue;
-				*/
+
+				// Keep going - we want to copy non-excluded child items
 			}
 			
 			// Standalone attachment
@@ -1624,26 +1583,41 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 					return false;
 				}
 				
-				let newAttachment = await Zotero.Attachments.copyAttachmentToLibrary(item, targetLibraryID);
-				if (options.annotations) {
-					await Zotero.Items.copyChildItems(item, newAttachment);
+				// TODO: Figure out what to do with annotations if options.annotations == true
+				if (linkedItem) {
+					return linkedItem.id;
 				}
-				
-				return newAttachment.id;
+				else {
+					let newAttachment = await Zotero.Attachments.copyAttachmentToLibrary(item, targetLibraryID);
+
+					if (options.annotations) {
+						await Zotero.Items.copyChildItems(item, newAttachment);
+					}
+
+					return newAttachment.id;
+				}
 			}
 			
-			// Create new clone item in target library
-			var newItem = item.clone(targetLibraryID, { skipTags: !options.tags });
+			// Create new clone item or use existing linked item in target library
+			var newItem;
+			var newItemID;
 			
-			var newItemID = await newItem.save({
-				skipSelect: true
-			});
-			
-			// Record link
-			await newItem.addLinkedItem(item);
+			if (linkedItem) {
+				newItem = linkedItem;
+				newItemID = linkedItem.id;
+			}
+			else {
+				newItem = item.clone(targetLibraryID, { skipTags: !options.tags });
+				newItemID = await newItem.save({
+					skipSelect: true
+				});
+
+				// Record link
+				await newItem.addLinkedItem(item);
+			}
 			
 			if (item.isNote()) {
-				if (Zotero.Libraries.get(newItem.libraryID).filesEditable) {
+				if (!linkedItem && Zotero.Libraries.get(newItem.libraryID).filesEditable) {
 					await Zotero.Notes.copyEmbeddedImages(item, newItem);
 				}
 				return newItemID;
@@ -1652,57 +1626,60 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 			// For regular items, add child items if prefs and permissions allow
 			
 			// Child notes
-			if (options.childNotes) {
-				var noteIDs = item.getNotes();
-				var notes = Zotero.Items.get(noteIDs);
-				for (let note of notes) {
-					let newNote = note.clone(targetLibraryID, { skipTags: !options.tags });
-					newNote.parentID = newItemID;
-					await newNote.save({
+			var noteIDs = item.getNotes().filter(id => !excludedItemIDs.has(id));
+			var notes = Zotero.Items.get(noteIDs);
+			for (let note of notes) {
+				let linkedNote = await note.getLinkedItem(targetLibraryID, true);
+				if (linkedNote && !linkedNote.deleted && !linkedNote.parentItem?.deleted) {
+					linkedNote.deleted = true;
+					await linkedNote.save({
 						skipSelect: true
-					})
-
-					if (Zotero.Libraries.get(newNote.libraryID).filesEditable) {
-						await Zotero.Notes.copyEmbeddedImages(note, newNote);
-					}
-					await newNote.addLinkedItem(note);
+					});
 				}
+				
+				let newNote = note.clone(targetLibraryID, { skipTags: !options.tags });
+				newNote.parentID = newItemID;
+				await newNote.save({
+					skipSelect: true
+				});
+
+				if (Zotero.Libraries.get(newNote.libraryID).filesEditable) {
+					await Zotero.Notes.copyEmbeddedImages(note, newNote);
+				}
+				await newNote.addLinkedItem(note);
 			}
 			
 			// Child attachments
-			if (options.childLinks || options.childFileAttachments) {
-				var attachmentIDs = item.getAttachments();
-				var attachments = Zotero.Items.get(attachmentIDs);
-				for (let attachment of attachments) {
-					var linkMode = attachment.attachmentLinkMode;
-					
-					// Skip linked files
-					if (linkMode == Zotero.Attachments.LINK_MODE_LINKED_FILE) {
-						Zotero.debug("Skipping child linked file attachment on drag");
-						continue;
-					}
-					
-					// Skip imported files if we don't have pref and permissions
-					if (linkMode == Zotero.Attachments.LINK_MODE_LINKED_URL) {
-						if (!options.childLinks) {
-							Zotero.debug("Skipping child link attachment on drag");
-							continue;
-						}
-					}
-					else {
-						if (!options.childFileAttachments
-								|| (!targetTreeRow.filesEditable && !targetTreeRow.isPublications())) {
-							Zotero.debug("Skipping child file attachment on drag");
-							continue;
-						}
-					}
-					let newAttachment = await Zotero.Attachments.copyAttachmentToLibrary(
-						attachment, targetLibraryID, newItemID
-					);
-					
-					if (options.annotations) {
-						await Zotero.Items.copyChildItems(attachment, newAttachment);
-					}
+			var attachmentIDs = item.getAttachments().filter(id => !excludedItemIDs.has(id));
+			var attachments = Zotero.Items.get(attachmentIDs);
+			for (let attachment of attachments) {
+				var linkMode = attachment.attachmentLinkMode;
+				
+				// Skip linked files
+				if (linkMode == Zotero.Attachments.LINK_MODE_LINKED_FILE) {
+					Zotero.debug("Skipping child linked file attachment on drag");
+					continue;
+				}
+				
+				if (!targetTreeRow.filesEditable && !targetTreeRow.isPublications()) {
+					Zotero.debug("Skipping child file attachment on drag");
+					continue;
+				}
+				
+				let linkedAttachment = await attachment.getLinkedItem(targetLibraryID, true);
+				if (linkedAttachment) {
+					// TODO: Figure out what to do with annotations if options.annotations == true
+					linkedAttachment.deleted = true;
+					await linkedAttachment.save({
+						skipSelect: true
+					});
+				}
+				let newAttachment = await Zotero.Attachments.copyAttachmentToLibrary(
+					attachment, targetLibraryID, newItemID
+				);
+				
+				if (options.annotations) {
+					await Zotero.Items.copyChildItems(attachment, newAttachment);
 				}
 			}
 			
@@ -1712,11 +1689,40 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 		var targetLibraryID = targetTreeRow.ref.libraryID;
 		var targetCollectionID = targetTreeRow.isCollection() ? targetTreeRow.ref.id : false;
 		
+		let showCopyOptionsDialog = (items) => {
+			let io = {
+				items: items,
+				targetLibraryID,
+				accepted: false,
+				excludedItemIDs: new Set(),
+				includeNotes: Zotero.Prefs.get('groups.copyChildNotes'),
+				includeFiles: Zotero.Prefs.get('groups.copyChildFileAttachments'),
+				includeLinks: Zotero.Prefs.get('groups.copyChildLinks'),
+				includeAnnotations: Zotero.Prefs.get('groups.copyAnnotations'),
+				includeTags: Zotero.Prefs.get('groups.copyTags')
+			};
+			window.openDialog("chrome://zotero/content/copyDialog.xhtml", "_blank", "chrome,modal", io);
+			if (!io.accepted) {
+				Zotero.debug('User cancelled cross-library copy dialog');
+				return null;
+			}
+			return {
+				excludedItemIDs: io.excludedItemIDs,
+				annotations: io.includeAnnotations,
+				tags: io.includeTags
+			};
+		};
+		
 		if (dataType == 'zotero/collection') {
 			var droppedCollection = await Zotero.Collections.getAsync(data[0]);
 			
 			// Collection drag between libraries
 			if (targetLibraryID != droppedCollection.libraryID) {
+				let copyOptions = showCopyOptionsDialog(droppedCollection.getChildItems(false, false));
+				if (!copyOptions) {
+					return;
+				}
+
 				await Zotero.DB.executeTransaction(async function () {
 					var copyCollections = async function (descendents, parentID, addItems) {
 						for (var desc of descendents) {
@@ -1822,18 +1828,22 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 				return Zotero.Promise.all(promises);	
 			}
 			
+			let addToPublicationsOptions;
 			if (targetTreeRow.isPublications()) {
 				items = Zotero.Items.keepParents(items);
 				let io = window.ZoteroPane.showPublicationsWizard(items);
 				if (!io) {
 					return;
 				}
-				copyOptions.childNotes = io.includeNotes;
-				copyOptions.childFileAttachments = io.includeFiles;
-				copyOptions.childLinks = true;
-				copyOptions.annotations = false;
+				addToPublicationsOptions = {
+					tags: Zotero.Prefs.get('groups.copyTags'),
+					childNotes: io.includeNotes,
+					childFileAttachments: io.includeFiles,
+					childLinks: true,
+					annotations: false
+				};
 				['keepRights', 'license', 'licenseName'].forEach(function (field) {
-					copyOptions[field] = io[field];
+					addToPublicationsOptions[field] = io[field];
 				});
 			}
 			
@@ -1841,7 +1851,7 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 			let newIDs = [];
 			let toMove = [];
 			// TODO: support items coming from different sources?
-			let sameLibrary = items[0].libraryID == targetLibraryID
+			let sameLibrary = items[0].libraryID == targetLibraryID;
 			
 			for (let item of items) {
 				if (!item.isTopLevelItem()) {
@@ -1857,7 +1867,10 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 			}
 			
 			if (!sameLibrary) {
-				let toReconcile = [];
+				let copyOptions = showCopyOptionsDialog(newItems);
+				if (!copyOptions) {
+					return;
+				}
 				
 				await Zotero.Utilities.Internal.forEachChunkAsync(
 					newItems,
@@ -1875,41 +1888,6 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 						});
 					}
 				);
-				
-				if (toReconcile.length) {
-					let sourceName = Zotero.Libraries.getName(items[0].libraryID);
-					let targetName = Zotero.Libraries.getName(targetLibraryID);
-					
-					let io = {
-						dataIn: {
-							type: "item",
-							captions: [
-								// TODO: localize
-								sourceName,
-								targetName,
-								"Merged Item"
-							],
-							objects: toReconcile
-						}
-					};
-					
-					/*
-					if (type == 'item') {
-						if (!Zotero.Utilities.isEmpty(changedCreators)) {
-							io.dataIn.changedCreators = changedCreators;
-						}
-					}
-					*/
-					
-					window.openDialog('chrome://zotero/content/merge.xhtml', '', 'chrome,modal,centerscreen', io);
-					
-					await Zotero.DB.executeTransaction(async function () {
-						// DEBUG: This probably needs to be updated if this starts being used
-						for (let obj of io.dataOut) {
-							await obj.ref.save();
-						}
-					});
-				}
 			}
 			
 			// Add items to target collection
@@ -1921,7 +1899,7 @@ var CollectionTree = class CollectionTree extends LibraryTree {
 				}.bind(this));
 			}
 			else if (targetTreeRow.isPublications()) {
-				await Zotero.Items.addToPublications(newItems, copyOptions);
+				await Zotero.Items.addToPublications(newItems, addToPublicationsOptions);
 			}
 			
 			// If moving, remove items from source collection
