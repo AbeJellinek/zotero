@@ -573,13 +573,18 @@ Zotero.Server.LocalAPI.Items = class extends LocalAPIEndpoint {
 
 		let search = new Zotero.Search();
 		search.libraryID = libraryID;
+		
 		if (isTop) {
 			search.addCondition('noChildren', 'true');
 		}
 		else {
 			search.addCondition('includeChildren', 'true');
 		}
-		search.addCondition('includeAnnotations', 'true');
+		
+		if (!pathParams.collectionKey) {
+			search.addCondition('includeAnnotations', 'true');
+		}
+		
 		if (pathParams.collectionKey) {
 			search.addCondition('collectionID', 'is',
 				Zotero.Collections.getIDFromLibraryAndKey(libraryID, pathParams.collectionKey));

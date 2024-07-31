@@ -123,6 +123,14 @@ describe("Local API Server", function () {
 				assert.equal(response.data.parentCollection, collection.key);
 				assert.include(response.links.up.href, collection.key);
 			});
+
+			describe("/items", function () {
+				it("should not include annotations", async function () {
+					let { response } = await apiGet(`/users/0/collections/${subcollection.key}/items`);
+					assert.isArray(response);
+					assert.sameMembers(response.map(item => item.key), [subcollectionItem.key, subcollectionAttachment.key]);
+				});
+			});
 		});
 	});
 
