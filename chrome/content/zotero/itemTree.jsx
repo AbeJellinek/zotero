@@ -2403,6 +2403,10 @@ var ItemTree = class ItemTree extends LibraryTree {
 					}
 				}
 
+				// If we have more than one file, we only want to call setAutoAttachmentTitle()
+				// at the end, once the attachments know whether they have siblings
+				let delaySetAutoAttachmentTitle = data.length > 1;
+
 				for (var i=0; i<data.length; i++) {
 					var file = data[i];
 
@@ -2472,6 +2476,7 @@ var ItemTree = class ItemTree extends LibraryTree {
 
 						item = await Zotero.Attachments.linkFromFile({
 							file,
+							title: delaySetAutoAttachmentTitle ? '' : undefined,
 							parentItemID,
 							collections: parentCollectionID ? [parentCollectionID] : undefined,
 							saveOptions: {
@@ -2487,6 +2492,7 @@ var ItemTree = class ItemTree extends LibraryTree {
 
 						item = await Zotero.Attachments.importFromFile({
 							file,
+							title: delaySetAutoAttachmentTitle ? '' : undefined,
 							fileBaseName,
 							libraryID: targetLibraryID,
 							parentItemID,
@@ -2508,6 +2514,13 @@ var ItemTree = class ItemTree extends LibraryTree {
 
 					if (item) {
 						addedItems.push(item);
+					}
+				}
+
+				if (delaySetAutoAttachmentTitle) {
+					for (let item of addedItems) {
+						item.setAutoAttachmentTitle();
+						await item.saveTx();
 					}
 				}
 			}
