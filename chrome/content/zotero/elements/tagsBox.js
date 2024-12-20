@@ -547,9 +547,10 @@
 
 		// Remove the row and update tab indexes
 		removeRow(row) {
-			var origRow = row;
-			origRow.parentNode.removeChild(origRow);
-			this.updateCount(this.count - 1);
+			row.remove();
+			if (!row.hasAttribute('isNew')) {
+				this.updateCount(this.count - 1);
+			}
 		}
 
 		removeAll = () => {
