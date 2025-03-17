@@ -146,6 +146,10 @@ info-box {
 			&.overflowing {
 				--ellipsis: var(--ellipsis-and-comma-character, '…,');
 				
+				.input:not(:focus, :hover) {
+					margin-inline-end: calc(0px - var(--editable-text-padding-inline));
+				}
+				
 				&::after {
 					display: none;
 				}
