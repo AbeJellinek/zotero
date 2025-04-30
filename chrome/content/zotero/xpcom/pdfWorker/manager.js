@@ -71,11 +71,12 @@ class PDFWorker {
 		});
 	}
 
-	async _query(action, data, transfer) {
+	async _query(item, action, data, transfer) {
+		let { attachmentReaderType: type, libraryID, itemID } = item;
 		return new Promise((resolve, reject) => {
 			this._lastPromiseID++;
 			this._waitingPromises[this._lastPromiseID] = { resolve, reject };
-			this._worker.postMessage({ id: this._lastPromiseID, action, data }, transfer);
+			this._worker.postMessage({ id: this._lastPromiseID, type, libraryID, itemID, action, data }, transfer);
 		});
 	}
 
@@ -214,7 +215,7 @@ class PDFWorker {
 			buf = new Uint8Array(buf).buffer;
 
 			try {
-				var res = await this._query('export', {
+				var res = await this._query(attachment, 'export', {
 					buf, annotations, password
 				}, [buf]);
 			}
@@ -316,7 +317,7 @@ class PDFWorker {
 			buf = new Uint8Array(buf).buffer;
 
 			try {
-				var { imported, deleted, buf: modifiedBuf } = await this._query('import', {
+				var { imported, deleted, buf: modifiedBuf } = await this._query(attachment, 'import', {
 					buf, existingAnnotations, password, transfer
 				}, [buf]);
 			}
@@ -380,8 +381,9 @@ class PDFWorker {
 		}, isPriority);
 	}
 
-	async processCitaviAnnotations(pdfPath, citaviAnnotations, isPriority, password) {
+	async processCitaviAnnotations(attachment, citaviAnnotations, isPriority, password) {
 		return this._enqueue(async () => {
+			let pdfPath = await attachment.getFilePathAsync();
 			let fileSize = (await IOUtils.stat(pdfPath)).size;
 			if (fileSize > Math.pow(2, 31) - 1) {
 				throw new Error(`The file "${pdfPath}" is too large`);
@@ -389,7 +391,7 @@ class PDFWorker {
 			let buf = await IOUtils.read(pdfPath);
 			buf = new Uint8Array(buf).buffer;
 			try {
-				var annotations = await this._query('importCitavi', {
+				var annotations = await this._query(attachment, 'importCitavi', {
 					buf, citaviAnnotations, password
 				}, [buf]);
 			}
@@ -408,14 +410,15 @@ class PDFWorker {
 	/**
 	 * Process Mendeley annotations by extending with data from PDF file
 	 *
-	 * @param {String} pdfPath PDF file path
+	 * @param {Zotero.Item} attachment
 	 * @param {Array} mendeleyAnnotations
 	 * @param {Boolean} [isPriority]
 	 * @param {String} [password]
 	 * @returns {Promise<Array>} Partial annotations
 	 */
-	async processMendeleyAnnotations(pdfPath, mendeleyAnnotations, isPriority, password) {
+	async processMendeleyAnnotations(attachment, mendeleyAnnotations, isPriority, password) {
 		return this._enqueue(async () => {
+			let pdfPath = await attachment.getFilePathAsync();
 			let fileSize = (await IOUtils.stat(pdfPath)).size;
 			if (fileSize > Math.pow(2, 31) - 1) {
 				throw new Error(`The file "${pdfPath}" is too large`);
@@ -423,7 +426,7 @@ class PDFWorker {
 			let buf = await IOUtils.read(pdfPath);
 			buf = new Uint8Array(buf).buffer;
 			try {
-				var annotations = await this._query('importMendeley', {
+				var annotations = await this._query(attachment, 'importMendeley', {
 					buf, mendeleyAnnotations, password
 				}, [buf]);
 			}
@@ -492,7 +495,7 @@ class PDFWorker {
 			buf = new Uint8Array(buf).buffer;
 
 			try {
-				var { buf: modifiedBuf } = await this._query('deletePages', {
+				var { buf: modifiedBuf } = await this._query(attachment, 'deletePages', {
 					buf, pageIndexes, password
 				}, [buf]);
 			}
@@ -590,7 +593,7 @@ class PDFWorker {
 			buf = new Uint8Array(buf).buffer;
 
 			try {
-				var { buf: modifiedBuf } = await this._query('rotatePages', {
+				var { buf: modifiedBuf } = await this._query(attachment, 'rotatePages', {
 					buf, pageIndexes, degrees, password
 				}, [buf]);
 			}
@@ -642,7 +645,7 @@ class PDFWorker {
 			buf = new Uint8Array(buf).buffer;
 
 			try {
-				var result = await this._query('getFulltext', {
+				var result = await this._query(attachment, 'getFulltext', {
 					buf, maxPages, password
 				}, [buf]);
 			}
@@ -688,7 +691,7 @@ class PDFWorker {
 			buf = new Uint8Array(buf).buffer;
 
 			try {
-				var result = await this._query('getRecognizerData', { buf, password }, [buf]);
+				var result = await this._query(attachment, 'getRecognizerData', { buf, password }, [buf]);
 			}
 			catch (e) {
 				let error = new Error(`Worker 'getRecognizerData' failed: ${JSON.stringify({ error: e.message })}`);
@@ -738,10 +741,8 @@ class PDFWorker {
 			let buf = await OS.File.read(path, {});
 			buf = new Uint8Array(buf).buffer;
 
-			let { libraryID } = attachment;
-
 			try {
-				var result = await this._query('renderAnnotations', { libraryID, buf, annotations, password }, [buf]);
+				var result = await this._query(attachment, 'renderAnnotations', { buf, annotations, password }, [buf]);
 			}
 			catch (e) {
 				let error = new Error(`Worker 'renderAnnotations' failed: ${JSON.stringify({ error: e.message })}`);

@@ -152,9 +152,8 @@ const ImportCitaviAnnotatons = async (translation) => {
 
 
 		try {
-			// eslint-disable-next-line no-await-in-loop
 			annotations = await Zotero.PDFWorker.processCitaviAnnotations(
-				itemAttachment.getFilePath(), annotations
+				itemAttachment, annotations
 			);
 			annotations.forEach((annotation) => {
 				promises.push(Zotero.Annotations.saveFromJSON(

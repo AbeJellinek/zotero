@@ -1769,7 +1769,7 @@ Zotero_Import_Mendeley.prototype._saveAnnotations = async function (annotations,
 				));
 				// Returns 'id', 'position', 'type', 'pageLabel', 'sortIndex', 'text' (for highlight)
 				Zotero.debug("Processing annotations in " + file);
-				annotations = await Zotero.PDFWorker.processMendeleyAnnotations(file, annotations);
+				annotations = await Zotero.PDFWorker.processMendeleyAnnotations(attachmentItem, annotations);
 				Zotero.debug("Done processing annotations");
 				
 				for (let annotation of annotations) {
