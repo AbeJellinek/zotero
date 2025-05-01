@@ -82,7 +82,7 @@ class PDFWorker {
 
 	_init() {
 		if (this._worker) return;
-		this._worker = new Worker(WORKER_URL);
+		this._worker = new ChromeWorker(WORKER_URL);
 		this._worker.addEventListener('message', async (event) => {
 			let message = event.data;
 			if (message.responseID) {
@@ -288,8 +288,8 @@ class PDFWorker {
 			Zotero.debug("Importing annotations for item " + attachment.libraryKey);
 			let t = new Date();
 			
-			if (!attachment.isPDFAttachment()) {
-				throw new Error('Item must be a PDF attachment');
+			if (!attachment.isPDFAttachment() && !attachment.isEPUBAttachment()) {
+				throw new Error('Item must be a PDF or EPUB attachment');
 			}
 
 			let mtime = Math.floor(await attachment.attachmentModificationTime / 1000);
@@ -318,7 +318,7 @@ class PDFWorker {
 
 			try {
 				var { imported, deleted, buf: modifiedBuf } = await this._query(attachment, 'import', {
-					buf, existingAnnotations, password, transfer
+					buf, path, existingAnnotations, password, transfer
 				}, [buf]);
 			}
 			catch (e) {

@@ -2160,7 +2160,7 @@ class Reader {
 	 */
 	async triggerAnnotationsImportCheck(itemID) {
 		let item = await Zotero.Items.getAsync(itemID);
-		if (!item.isPDFAttachment()
+		if (!(item.isPDFAttachment() || item.isEPUBAttachment())
 			|| !item.isEditable()
 			|| item.deleted
 			|| item.parentItem && item.parentItem.deleted
