@@ -388,6 +388,7 @@ scaffold-item-previews {
 
 		button {
 			appearance: none;
+			--macos-tahoe-button-inset: 0;
 			margin: 0;
 			padding: 4px;
 			min-width: 0;

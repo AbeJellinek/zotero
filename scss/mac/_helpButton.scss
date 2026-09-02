@@ -7,4 +7,8 @@
 	.button-text {
 		visibility: hidden;
 	}
+
+	// This widget is drawn at a fixed size at the start of the element's box,
+	// so the Tahoe bezel inset would just push the circle away from the edge
+	--macos-tahoe-button-inset: 0;
 }

@@ -90,6 +90,7 @@ quick-search-textbox {
 	border: 0;
 	border-radius: 5px;
 	appearance: none;
+	--macos-tahoe-button-inset: 0;
 	min-width: 0;
 	cursor: default;
 	@include svgicon-menu("chevron-6", "universal", "8");

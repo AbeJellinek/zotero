@@ -386,6 +386,33 @@ function modify_omni {
 	# Use Zotero URL opening in Mozilla dialogs (e.g., app update dialog)
 	replace_line 'function openURL\(aURL\) \{' 'function openURL(aURL) {let {Zotero} = ChromeUtils.importESModule("chrome:\/\/zotero\/content\/zotero.mjs"); Zotero.launchURL(aURL); if (true) { return; }' chrome/toolkit/content/global/contentAreaUtils.js
 	
+	# Restore padding inside native controls on macOS 26
+	#
+	# On Tahoe, AppKit draws the bezel of a push button or pop-up button inset
+	# within the widget's border box instead of filling it, but
+	# nsNativeThemeCocoa still reserves its pre-Tahoe border for the bezel.
+	# Specify a smaller amount of padding so button text appears in the right
+	# place.
+	#
+	# Elements that don't need the inset (because they use appearance: none or
+	# are fixed-size) can opt out via --macos-tahoe-button-inset: 0.
+	#
+	if [[ $platform = "mac" ]]; then
+		file="chrome/toolkit/skin/classic/global/button.css"
+		check_line '^\.button-text \{' $file
+		echo >> $file
+		echo '@media (-moz-mac-tahoe-theme) {' >> $file
+		echo '  .button-box { padding-inline: var(--macos-tahoe-button-inset, 5px); }' >> $file
+		echo '}' >> $file
+
+		file="chrome/toolkit/skin/classic/global/menulist.css"
+		check_line '^:host\(\[native\]\) \{' $file
+		echo >> $file
+		echo '@media (-moz-mac-tahoe-theme) {' >> $file
+		echo '  :host([native]) { padding-inline: 3px 8px; }' >> $file
+		echo '}' >> $file
+	fi
+
 	#
 	# Modify Add-ons window
 	#
