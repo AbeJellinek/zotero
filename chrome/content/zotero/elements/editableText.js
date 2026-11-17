@@ -36,13 +36,27 @@
 		false
 	);
 
+	// Max time (ms) and distance (CSS px) between two taps of a double tap
+	const DOUBLE_TAP_DELAY = 400;
+	const DOUBLE_TAP_SLOP = 25;
+
 	class EditableText extends XULElementBase {
 		_input;
 
 		_ignoredWindowInactiveBlur = false;
-		
+
 		_focusMousedownEvent = false;
-		
+
+		// Touchscreen text selection. Dragging a finger scrolls, so text is selected with
+		// the same gestures as in the reader: a long press on a word selects it (a long press
+		// on the selection or off a word opens the context menu), and a double tap followed
+		// by a drag selects words. Dragging after either extends the selection by words.
+		static _lastTouchTap = null;
+
+		_touchSelection = null;
+
+		_touchSelectionAnchor = null;
+
 		static observedAttributes = [
 			'multiline',
 			'readonly',
@@ -308,6 +322,11 @@
 				input.addEventListener('blur', this._handleBlur);
 				input.addEventListener('keydown', this._handleKeyDown);
 				input.addEventListener('mousedown', this._handleMouseDown);
+				input.addEventListener('touchstart', this._handleTouchStart, { passive: true });
+				input.addEventListener('touchmove', this._handleTouchMove, { passive: false });
+				input.addEventListener('touchend', this._handleTouchEnd, { passive: false });
+				input.addEventListener('touchcancel', this._handleTouchCancel);
+				input.addEventListener('contextmenu', this._handleContextMenu);
 				input.addEventListener('dragover', this._handleDragOver);
 				input.addEventListener('drop', this._handleDrop);
 				if (autocompleteEnabled) {
@@ -580,6 +599,168 @@
 			}
 		};
 		
+		_handleTouchStart = (event) => {
+			let touch = event.touches.length === 1 && event.touches[0];
+			let lastTap = EditableText._lastTouchTap;
+			EditableText._lastTouchTap = null;
+			if (!touch) {
+				this._touchSelection = null;
+				return;
+			}
+			let doubleTap = !!lastTap
+				&& event.timeStamp - lastTap.time <= DOUBLE_TAP_DELAY
+				&& Math.hypot(touch.clientX - lastTap.x, touch.clientY - lastTap.y) <= DOUBLE_TAP_SLOP;
+			this._touchSelection = {
+				mode: doubleTap ? 'doubleTap' : 'none',
+				x: touch.clientX,
+				y: touch.clientY,
+				moved: false
+			};
+		};
+
+		_handleTouchMove = (event) => {
+			let state = this._touchSelection;
+			let touch = event.touches[0];
+			if (!state || !touch) {
+				return;
+			}
+			// Dragging after a double tap selects words, starting from the tapped one
+			if (state.mode === 'doubleTap') {
+				state.mode = this._startTouchWordSelection(state.x, state.y) ? 'selecting' : 'none';
+			}
+			if (state.mode === 'selecting') {
+				// Keep the drag from scrolling
+				event.preventDefault();
+				this._extendTouchWordSelection(touch.clientX, touch.clientY);
+				return;
+			}
+			if (Math.hypot(touch.clientX - state.x, touch.clientY - state.y) > DOUBLE_TAP_SLOP) {
+				state.moved = true;
+			}
+		};
+
+		_handleTouchEnd = (event) => {
+			let state = this._touchSelection;
+			this._touchSelection = null;
+			if (!state) {
+				return;
+			}
+			if (state.mode === 'selecting') {
+				// Don't let the compatibility mouse events for lifting the finger collapse the selection
+				event.preventDefault();
+				return;
+			}
+			if (state.mode === 'none' && !state.moved && !event.touches.length) {
+				EditableText._lastTouchTap = { x: state.x, y: state.y, time: event.timeStamp };
+			}
+		};
+
+		_handleTouchCancel = () => {
+			this._touchSelection = null;
+		};
+
+		_handleContextMenu = (event) => {
+			// A long press with a finger fires contextmenu with the main button
+			let state = this._touchSelection;
+			if (!state || event.pointerType !== 'touch' || event.button !== 0) {
+				return;
+			}
+			let input = this._input;
+			if (this.focused && input.selectionStart !== input.selectionEnd) {
+				let offset = this._getTouchOffset(event.clientX, event.clientY);
+				if (offset !== null && offset >= input.selectionStart && offset <= input.selectionEnd) {
+					// Over the selection: show the context menu
+					return;
+				}
+			}
+			if (!this._startTouchWordSelection(event.clientX, event.clientY)) {
+				return;
+			}
+			state.mode = 'selecting';
+			// Don't show any context menu (including the item box's)
+			event.preventDefault();
+			event.stopPropagation();
+		};
+
+		/**
+		 * Select the word at the given client coordinates, focusing the field if necessary
+		 *
+		 * @return {Boolean} - Whether a word was selected
+		 */
+		_startTouchWordSelection(x, y) {
+			let input = this._input;
+			if (!this.focused) {
+				// Focus as if clicked at the point, rather than selecting everything as when
+				// focusing via the keyboard (the value can change on focus, so offsets have to
+				// be determined afterwards)
+				this._focusMousedownEvent = { clientX: x, clientY: y };
+				input.focus();
+			}
+			let offset = this._getTouchOffset(x, y);
+			let word = offset !== null && this._getWordAt(offset);
+			if (!word?.isWordLike) {
+				return false;
+			}
+			this._touchSelectionAnchor = [word.start, word.end];
+			input.setSelectionRange(word.start, word.end);
+			return true;
+		}
+
+		_extendTouchWordSelection(x, y) {
+			let input = this._input;
+			let offset = this._getTouchOffset(x, y);
+			// Past the field: extend to the start or end
+			if (offset === null) {
+				let rect = input.getBoundingClientRect();
+				if (y < rect.top || x < rect.left) {
+					offset = 0;
+				}
+				else if (y > rect.bottom || x > rect.right) {
+					offset = input.value.length;
+				}
+				else {
+					return;
+				}
+			}
+			let [anchorStart, anchorEnd] = this._touchSelectionAnchor;
+			let word = this._getWordAt(offset);
+			if (word && word.start < anchorStart) {
+				input.setSelectionRange(word.start, anchorEnd, 'backward');
+			}
+			else {
+				input.setSelectionRange(anchorStart, Math.max(word?.end ?? offset, anchorEnd), 'forward');
+			}
+		}
+
+		_getTouchOffset(x, y) {
+			let pos = document.caretPositionFromPoint(x, y);
+			return pos?.offsetNode === this._input ? pos.offset : null;
+		}
+
+		/**
+		 * @return {{ start: Number, end: Number, isWordLike: Boolean } | null}
+		 */
+		_getWordAt(offset) {
+			let value = this._input.value;
+			if (!value) {
+				return null;
+			}
+			let segments = new Intl.Segmenter(undefined, { granularity: 'word' }).segment(value);
+			let segment = segments.containing(Math.min(offset, value.length - 1));
+			// A point on the right half of a word's last character gives the offset after it
+			if (!segment.isWordLike && offset > 0) {
+				let previous = segments.containing(offset - 1);
+				if (previous.isWordLike) {
+					segment = previous;
+				}
+			}
+			return {
+				start: segment.index,
+				end: segment.index + segment.segment.length,
+				isWordLike: !!segment.isWordLike
+			};
+		}
+
 		_handleDragOver = (event) => {
 			// If the input is not focused, override the default drop behavior
 			if ((document.activeElement !== this._input || Services.focus.activeWindow !== window)
