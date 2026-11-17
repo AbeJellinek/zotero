@@ -14,6 +14,14 @@ pref("network.http.speculative-parallel-limit", 0);
 // Let operations run as long as necessary
 pref("dom.max_chrome_script_run_time", 0);
 
+// Enable touch events when a touchscreen is present. This is already the default
+// outside macOS; on macOS, our Gecko build detects touchscreens on macOS 27+.
+pref("dom.w3c_touch_events.enabled", 2);
+// Gecko's touch caret handles for text fields would also be enabled by the above, but they
+// aren't visible in our windows and only swallow taps near the cursor (e.g., the second tap
+// of a double-tap that selects a word)
+pref("layout.accessiblecaret.enabled_on_touch", false);
+
 pref("intl.locale.requested", '');
 pref("intl.regional_prefs.use_os_locales", false);
 

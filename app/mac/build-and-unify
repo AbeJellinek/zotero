@@ -62,10 +62,10 @@ if [ $COMPONENTS_ONLY != 1 ]; then
 	mv zotero.xz "$APP_ROOT_DIR/mac/zotero.xz"
 fi
 
-# Package custom Firefox components for fetch_xulrunner. Add XUL to this list if needed.
-# Upload the archive to ${custom_components_url}mac/ and set custom_components_hash_mac
-# in config.sh to the hash printed below.
-custom_components=(libmozglue.dylib)
+# Package custom Firefox components for fetch_xulrunner (libmozglue for the speech fixes, XUL for
+# touchscreen support). Upload the archive to ${custom_components_url}mac/ and set
+# custom_components_hash_mac in config.sh to the hash printed below.
+custom_components=(libmozglue.dylib XUL)
 mkdir MacOS
 for component in "${custom_components[@]}"; do
 	cp "x64/$fx_app_name/Contents/MacOS/$component" MacOS/

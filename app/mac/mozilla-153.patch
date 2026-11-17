@@ -463,3 +463,565 @@ index f8f01e999e54..06695499daa4 100644
  if CONFIG["MOZ_WIDGET_TOOLKIT"]:
      if CONFIG["MOZ_MEMORY"] and FORCE_SHARED_LIB:
          pass
+diff --git a/widget/cocoa/MOZMenuOpeningCoordinator.mm b/widget/cocoa/MOZMenuOpeningCoordinator.mm
+index 60ab5b72cd..f1c1543e0e 100644
+--- a/widget/cocoa/MOZMenuOpeningCoordinator.mm
++++ b/widget/cocoa/MOZMenuOpeningCoordinator.mm
+@@ -104,7 +104,13 @@ static BOOL sNeedToUnwindForMenuClosing = NO;
+ 
+   if (!mRunMenuIsOnTheStack) {
+     // Call _runMenu from the event loop, so that it doesn't block this call.
+-    [self performSelector:@selector(_runMenu) withObject:nil afterDelay:0.0];
++    // Use the common modes, since the run loop isn't in the default mode while
++    // AppKit is tracking a touch (e.g. the long press that opens a context
++    // menu), and the menu shouldn't wait until the finger is lifted.
++    [self performSelector:@selector(_runMenu)
++               withObject:nil
++               afterDelay:0.0
++                  inModes:@[ NSRunLoopCommonModes ]];
+   }
+ 
+   return handle;
+diff --git a/widget/cocoa/nsChildView.h b/widget/cocoa/nsChildView.h
+index 9d3cc73d5d..afbad48489 100644
+--- a/widget/cocoa/nsChildView.h
++++ b/widget/cocoa/nsChildView.h
+@@ -93,6 +93,8 @@ class WidgetRenderingContext;
+ - (void)viewDidChangeBackingProperties;
+ @end
+ 
++@class MOZDirectTouchRecognizer;
++
+ @interface ChildView : NSView <
+ #ifdef ACCESSIBILITY
+                            mozAccessible,
+@@ -192,6 +194,10 @@ class WidgetRenderingContext;
+ 
+   // Last pressure stage by trackpad's force click
+   NSInteger mLastPressureStage;
++
++  // Receives direct (touchscreen) touches, which AppKit otherwise only
++  // delivers to views as emulated mouse events.
++  MOZDirectTouchRecognizer* mDirectTouchRecognizer;  // [STRONG]
+ }
+ 
+ // class initialization
+diff --git a/widget/cocoa/nsCocoaUtils.h b/widget/cocoa/nsCocoaUtils.h
+index 4d7e8f3e7d..8f1d4f53a2 100644
+--- a/widget/cocoa/nsCocoaUtils.h
++++ b/widget/cocoa/nsCocoaUtils.h
+@@ -441,6 +441,9 @@ class nsCocoaUtils {
+    */
+   static mozilla::TimeStamp GetEventTimeStamp(NSTimeInterval aEventTime);
+ 
++  // Whether any connected screen accepts direct touch input (macOS 27+)
++  static bool HasTouchScreen();
++
+   /**
+    * Check whether double clicking on the titlebar should cause the window to
+    * zoom (maximize).
+diff --git a/widget/cocoa/nsCocoaUtils.mm b/widget/cocoa/nsCocoaUtils.mm
+index 0361587d5f..87f91d0852 100644
+--- a/widget/cocoa/nsCocoaUtils.mm
++++ b/widget/cocoa/nsCocoaUtils.mm
+@@ -1865,3 +1865,20 @@ NSRectEdge nsCocoaUtils::PopupPositionToNSRectEdge(int8_t aPosition) {
+       return NSRectEdgeMinY;
+   }
+ }
++
++// static
++bool nsCocoaUtils::HasTouchScreen() {
++  NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
++
++  // -[NSScreen touchCapabilities] is new in macOS 27, so look it up at runtime
++  // rather than requiring the macOS 27 SDK.
++  for (NSScreen* screen in [NSScreen screens]) {
++    if ([screen respondsToSelector:@selector(touchCapabilities)] &&
++        [[screen valueForKey:@"touchCapabilities"] unsignedIntegerValue] != 0) {
++      return true;
++    }
++  }
++  return false;
++
++  NS_OBJC_END_TRY_BLOCK_RETURN(false);
++}
+diff --git a/widget/cocoa/nsCocoaWindow.h b/widget/cocoa/nsCocoaWindow.h
+index b15bde4eff..5a301c9af6 100644
+--- a/widget/cocoa/nsCocoaWindow.h
++++ b/widget/cocoa/nsCocoaWindow.h
+@@ -285,6 +285,14 @@ class nsCocoaWindow final : public nsIWidget {
+   nsresult SynthesizeNativeTouchpadDoubleTap(LayoutDeviceIntPoint aPoint,
+                                              uint32_t aModifierFlags) override;
+ 
++  // Dispatches a direct (touchscreen) touch point, received from AppKit via
++  // MOZDirectTouchRecognizer, through APZ. aPoint is in widget coordinates.
++  void DispatchDirectTouchPoint(uint32_t aPointerId,
++                                TouchPointerState aPointerState,
++                                LayoutDeviceIntPoint aPoint,
++                                mozilla::TimeStamp aTimeStamp);
++  uint32_t GetMaxTouchPoints() const override;
++
+   static bool DoHasPendingInputEvent();
+   static uint32_t GetCurrentInputEventCount();
+   static void UpdateCurrentInputEventCount();
+@@ -623,6 +631,9 @@ class nsCocoaWindow final : public nsIWidget {
+   // multiple synthesized points
+   mozilla::UniquePtr<mozilla::MultiTouchInput> mSynthesizedTouchInput;
+ 
++  // Touch state for real direct touches (see DispatchDirectTouchPoint)
++  mozilla::UniquePtr<mozilla::MultiTouchInput> mDirectTouchInput;
++
+   // A runnable we might assign to run ProcessTransitions at a later event loop.
+   // Cancelable so we can cancel it in CancelAllTransitions(), if needed.
+   RefPtr<mozilla::CancelableRunnable> mProcessTransitionsPending;
+diff --git a/widget/cocoa/nsCocoaWindow.mm b/widget/cocoa/nsCocoaWindow.mm
+index 02418d5d8c..2a870f175f 100644
+--- a/widget/cocoa/nsCocoaWindow.mm
++++ b/widget/cocoa/nsCocoaWindow.mm
+@@ -218,6 +218,8 @@ static uint32_t sUniqueKeyEventId = 0;
+ 
+ - (bool)beginOrEndGestureForEventPhase:(NSEvent*)aEvent;
+ 
++- (nsCocoaWindow*)geckoChildForDirectTouch;
++
+ @end
+ 
+ #pragma mark -
+@@ -612,6 +614,26 @@ nsresult nsCocoaWindow::SynthesizeNativeTouchPoint(
+   NS_OBJC_END_TRY_BLOCK_RETURN(NS_ERROR_FAILURE);
+ }
+ 
++void nsCocoaWindow::DispatchDirectTouchPoint(uint32_t aPointerId,
++                                             TouchPointerState aPointerState,
++                                             LayoutDeviceIntPoint aPoint,
++                                             TimeStamp aTimeStamp) {
++  MOZ_ASSERT(NS_IsMainThread());
++  if (!mDirectTouchInput) {
++    mDirectTouchInput = MakeUnique<MultiTouchInput>();
++  }
++  // Touchscreens don't report pressure; use the Pointer Events default for an
++  // active pointer without pressure support.
++  MultiTouchInput inputToDispatch =
++      UpdateSynthesizedTouchState(mDirectTouchInput.get(), aTimeStamp,
++                                  aPointerId, aPointerState, aPoint, 0.5, 0);
++  DispatchTouchInput(inputToDispatch);
++}
++
++uint32_t nsCocoaWindow::GetMaxTouchPoints() const {
++  return nsCocoaUtils::HasTouchScreen() ? 10 : 0;
++}
++
+ nsresult nsCocoaWindow::SynthesizeNativeTouchpadDoubleTap(
+     mozilla::LayoutDeviceIntPoint aPoint, uint32_t aModifierFlags) {
+   NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
+@@ -1675,6 +1697,261 @@ class WidgetsReleaserRunnable final : public mozilla::Runnable {
+ 
+ @end
+ 
++// MOZDirectTouchRecognizer
++//
++// On macOS 27+, a finger on a touchscreen reaches plain NSViews only as
++// emulated mouse events (and a long press as a right click), which can't be
++// told apart from a real mouse. Gesture recognizers, however, receive the
++// actual direct NSTouches. This recognizer is attached to the ChildView,
++// claims every direct touch (which stops AppKit from emulating the mouse for
++// it), and forwards the touches to Gecko as MultiTouchInput, the same path
++// touchscreens use on Windows and Linux: APZ pans, flings and zooms, content
++// gets touch and pointer events, and taps and long presses are converted to
++// mouse clicks and context menus by APZ.
++//
++// Touches that start in a window-dragging region aren't claimed, so AppKit's
++// mouse emulation can still move the window.
++//
++// Claiming a touch doesn't always stop AppKit's emulation: if the touch is
++// cancelled (e.g. because the long-press context menu opened a native menu),
++// AppKit still delivers the emulated right click for the long press, and may
++// follow it with an emulated left drag. Those emulated events carry the
++// timestamp of the touch that caused them, so ChildView drops mouse events
++// that start at the same time as a touch this recognizer claimed.
++@interface MOZDirectTouchRecognizer : NSGestureRecognizer <NSGestureRecognizerDelegate> {
++ @private
++  ChildView* mChildView;               // [WEAK] owns us via the view's recognizers
++  NSMutableDictionary* mTouchIDs;      // [STRONG] NSTouch identity -> NSNumber
++  uint32_t mNextTouchID;
++  NSTimeInterval mClaimedTouchTimes[8];  // ring buffer of touch-down times
++  uint32_t mNextClaimedTouchTime;
++  NSUInteger mSuppressedMouseButtons;    // bit per button number
++}
++- (instancetype)initWithChildView:(ChildView*)aChildView;
++- (void)childViewDestroyed;
++- (BOOL)shouldIgnoreMouseEvent:(NSEvent*)aEvent;
++@end
++
++@implementation MOZDirectTouchRecognizer
++
++- (instancetype)initWithChildView:(ChildView*)aChildView {
++  if ((self = [super initWithTarget:nil action:nil])) {
++    mChildView = aChildView;
++    mTouchIDs = [[NSMutableDictionary alloc] init];
++    // Touch IDs start above 0 so they never collide with the mouse pointer ID
++    mNextTouchID = 1;
++    self.allowedTouchTypes = NSTouchTypeMaskDirect;
++    self.delaysPrimaryMouseButtonEvents = YES;
++    self.delaysSecondaryMouseButtonEvents = YES;
++    self.delegate = self;
++  }
++  return self;
++}
++
++- (void)dealloc {
++  [mTouchIDs release];
++  [super dealloc];
++}
++
++- (void)childViewDestroyed {
++  mChildView = nil;
++  [mTouchIDs removeAllObjects];
++}
++
++// Whether aEvent is part of a mouse sequence that AppKit emulated for a touch
++// we already forwarded to Gecko as a touch.
++- (BOOL)shouldIgnoreMouseEvent:(NSEvent*)aEvent {
++  NSInteger button = [aEvent buttonNumber];
++  if (button < 0 || button >= (NSInteger)(sizeof(NSUInteger) * 8)) {
++    return NO;
++  }
++  NSUInteger bit = (NSUInteger)1 << button;
++  switch ([aEvent type]) {
++    case NSEventTypeLeftMouseDown:
++    case NSEventTypeRightMouseDown:
++    case NSEventTypeOtherMouseDown: {
++      mSuppressedMouseButtons &= ~bit;
++      if ([aEvent subtype] != NSEventSubtypeMouseEvent) {
++        return NO;
++      }
++      NSTimeInterval time = [aEvent timestamp];
++      for (NSTimeInterval claimed : mClaimedTouchTimes) {
++        if (claimed > 0 && fabs(time - claimed) < 0.005) {
++          mSuppressedMouseButtons |= bit;
++          return YES;
++        }
++      }
++      return NO;
++    }
++    case NSEventTypeLeftMouseUp:
++    case NSEventTypeRightMouseUp:
++    case NSEventTypeOtherMouseUp: {
++      BOOL suppressed = (mSuppressedMouseButtons & bit) != 0;
++      mSuppressedMouseButtons &= ~bit;
++      return suppressed;
++    }
++    default:
++      return (mSuppressedMouseButtons & bit) != 0;
++  }
++}
++
++- (nsCocoaWindow*)geckoChild {
++  return mChildView ? [mChildView geckoChildForDirectTouch] : nullptr;
++}
++
++- (BOOL)gestureRecognizer:(NSGestureRecognizer*)aRecognizer
++       shouldReceiveTouch:(NSTouch*)aTouch {
++  nsCocoaWindow* geckoChild = [self geckoChild];
++  if (!geckoChild || aTouch.type != NSTouchTypeDirect) {
++    return NO;
++  }
++  // Leave a gesture that starts in a window-dragging region (e.g. an empty
++  // part of a tab bar drawn in the titlebar) to AppKit's mouse emulation, so
++  // that it can still move the window. Windows without -moz-window-dragging
++  // regions have no non-draggable region either.
++  if ([mTouchIDs count] == 0) {
++    LayoutDeviceIntRegion nonDraggable = geckoChild->GetNonDraggableRegion();
++    if (!nonDraggable.IsEmpty()) {
++      NSPoint locationInView = [aTouch locationInView:mChildView];
++      LayoutDeviceIntPoint pt =
++          geckoChild->CocoaPointsToDevPixels(locationInView);
++      if (!nonDraggable.Contains(pt.x, pt.y)) {
++        return NO;
++      }
++    }
++  }
++  return YES;
++}
++
++// Once we've claimed a touch, no other recognizer on the view should act on
++// it. In particular, AppKit attaches a long-press context menu recognizer to
++// the view, which would otherwise reset us (ending the touch) when a finger is
++// held still. Recognizers elsewhere, such as those of a menu opened by a long
++// press, must still be able to take over the touch.
++- (BOOL)canPreventGestureRecognizer:(NSGestureRecognizer*)aOther {
++  return mChildView && aOther.view == mChildView;
++}
++
++- (BOOL)canBePreventedByGestureRecognizer:(NSGestureRecognizer*)aOther {
++  return NO;
++}
++
++- (void)dispatchTouches:(NSEvent*)aEvent
++                 phases:(NSTouchPhase)aPhases
++                  state:(TouchPointerState)aState {
++  nsCocoaWindow* geckoChild = [self geckoChild];
++  NSSet<NSTouch*>* touches = [aEvent touchesMatchingPhase:aPhases
++                                                   inView:mChildView];
++  TimeStamp timeStamp = nsCocoaUtils::GetEventTimeStamp([aEvent timestamp]);
++  for (NSTouch* touch in touches) {
++    if (touch.type != NSTouchTypeDirect) {
++      continue;
++    }
++    id<NSObject, NSCopying> identity = touch.identity;
++    NSNumber* touchID = mTouchIDs[identity];
++    if (!touchID) {
++      if (aState != TOUCH_CONTACT) {
++        continue;
++      }
++      touchID = @(mNextTouchID++);
++      mTouchIDs[identity] = touchID;
++      mClaimedTouchTimes[mNextClaimedTouchTime++ %
++                         std::size(mClaimedTouchTimes)] = [aEvent timestamp];
++    }
++    if (aState != TOUCH_CONTACT) {
++      [mTouchIDs removeObjectForKey:identity];
++    }
++    if (!geckoChild) {
++      continue;
++    }
++    NSPoint locationInView = [touch locationInView:mChildView];
++    LayoutDeviceIntPoint pt =
++        geckoChild->CocoaPointsToDevPixels(locationInView);
++    // Dispatching can destroy the widget
++    RefPtr<nsCocoaWindow> kungFuDeathGrip(geckoChild);
++    geckoChild->DispatchDirectTouchPoint([touchID unsignedIntValue], aState,
++                                         pt, timeStamp);
++    geckoChild = [self geckoChild];
++  }
++}
++
++- (void)updateStateAfterEvent {
++  if ([mTouchIDs count] == 0) {
++    if (self.state == NSGestureRecognizerStateBegan ||
++        self.state == NSGestureRecognizerStateChanged) {
++      self.state = NSGestureRecognizerStateEnded;
++    }
++    else if (self.state == NSGestureRecognizerStatePossible) {
++      self.state = NSGestureRecognizerStateFailed;
++    }
++  }
++}
++
++- (void)touchesBeganWithEvent:(NSEvent*)aEvent {
++  [super touchesBeganWithEvent:aEvent];
++  if (self.state == NSGestureRecognizerStatePossible) {
++    // Claim the touch sequence right away so that AppKit doesn't also deliver
++    // emulated mouse events (or a right click on long press) to the view.
++    self.state = NSGestureRecognizerStateBegan;
++    NSWindow* window = [mChildView window];
++    if (![NSApp isActive]) {
++      [NSApp activateIgnoringOtherApps:YES];
++    }
++    if (window && ![window isKeyWindow] && [window canBecomeKeyWindow]) {
++      [window makeKeyAndOrderFront:nil];
++    }
++  }
++  else {
++    self.state = NSGestureRecognizerStateChanged;
++  }
++  [self dispatchTouches:aEvent phases:NSTouchPhaseBegan state:TOUCH_CONTACT];
++}
++
++- (void)touchesMovedWithEvent:(NSEvent*)aEvent {
++  [super touchesMovedWithEvent:aEvent];
++  if (self.state == NSGestureRecognizerStateBegan) {
++    self.state = NSGestureRecognizerStateChanged;
++  }
++  [self dispatchTouches:aEvent phases:NSTouchPhaseMoved state:TOUCH_CONTACT];
++}
++
++- (void)touchesEndedWithEvent:(NSEvent*)aEvent {
++  [super touchesEndedWithEvent:aEvent];
++  [self dispatchTouches:aEvent phases:NSTouchPhaseEnded state:TOUCH_REMOVE];
++  [self updateStateAfterEvent];
++}
++
++- (void)touchesCancelledWithEvent:(NSEvent*)aEvent {
++  [super touchesCancelledWithEvent:aEvent];
++  [self dispatchTouches:aEvent phases:NSTouchPhaseCancelled state:TOUCH_CANCEL];
++  if ([mTouchIDs count] == 0 &&
++      (self.state == NSGestureRecognizerStateBegan ||
++       self.state == NSGestureRecognizerStateChanged)) {
++    self.state = NSGestureRecognizerStateCancelled;
++  }
++}
++
++- (void)dispatchCancelForActiveTouches {
++  if ([mTouchIDs count] && [self geckoChild]) {
++    nsCocoaWindow* geckoChild = [self geckoChild];
++    RefPtr<nsCocoaWindow> kungFuDeathGrip(geckoChild);
++    for (NSNumber* touchID in [mTouchIDs allValues]) {
++      geckoChild->DispatchDirectTouchPoint(
++          [touchID unsignedIntValue], TOUCH_CANCEL, LayoutDeviceIntPoint(),
++          TimeStamp::Now());
++    }
++  }
++  [mTouchIDs removeAllObjects];
++}
++
++- (void)reset {
++  [super reset];
++  // A reset while touches are down (e.g. the window lost focus) ends them
++  [self dispatchCancelForActiveTouches];
++}
++
++@end
++
+ @implementation ChildView
+ 
+ // globalDragPboard is non-null during native drag sessions that did not
+@@ -1781,6 +2058,14 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
+ 
+   mLastPressureStage = 0;
+ 
++  mDirectTouchRecognizer = nil;
++  if (mozilla::Preferences::GetBool("widget.macos.direct-touch.enabled",
++                                    true)) {
++    mDirectTouchRecognizer =
++        [[MOZDirectTouchRecognizer alloc] initWithChildView:self];
++    [self addGestureRecognizer:mDirectTouchRecognizer];
++  }
++
+   // register for things we'll take from other applications
+   [ChildView registerViewForDraggedTypes:self];
+ 
+@@ -1837,6 +2122,8 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
+   [mPixelHostingView removeFromSuperview];
+   [mPixelHostingView release];
+   [mRootCALayer release];
++  [mDirectTouchRecognizer childViewDestroyed];
++  [mDirectTouchRecognizer release];
+ 
+   if (gLastDragView == self) {
+     gLastDragView = nil;
+@@ -1847,7 +2134,12 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
+   NS_OBJC_END_TRY_IGNORE_BLOCK;
+ }
+ 
++- (nsCocoaWindow*)geckoChildForDirectTouch {
++  return mGeckoChild;
++}
++
+ - (void)widgetDestroyed {
++  [mDirectTouchRecognizer childViewDestroyed];
+   if (mTextInputHandler) {
+     mTextInputHandler->OnDestroyWidget(mGeckoChild);
+     mTextInputHandler = nullptr;
+@@ -2381,6 +2673,9 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
+ 
+ - (void)mouseDown:(NSEvent*)theEvent {
+   NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
++  if ([mDirectTouchRecognizer shouldIgnoreMouseEvent:theEvent]) {
++    return;
++  }
+   mPerformedDrag = NO;
+ 
+   if ([self shouldDelayWindowOrderingForEvent:theEvent]) {
+@@ -2456,6 +2751,9 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
+ 
+ - (void)mouseUp:(NSEvent*)theEvent {
+   NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
++  if ([mDirectTouchRecognizer shouldIgnoreMouseEvent:theEvent]) {
++    return;
++  }
+ 
+   gLastDragView = nil;
+ 
+@@ -2568,6 +2866,9 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
+ 
+ - (void)mouseDragged:(NSEvent*)theEvent {
+   NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
++  if ([mDirectTouchRecognizer shouldIgnoreMouseEvent:theEvent]) {
++    return;
++  }
+ 
+   if (!mGeckoChild) return;
+   if (mTextInputHandler->OnHandleEvent(theEvent)) {
+@@ -2587,6 +2888,9 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
+ 
+ - (void)rightMouseDown:(NSEvent*)theEvent {
+   NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
++  if ([mDirectTouchRecognizer shouldIgnoreMouseEvent:theEvent]) {
++    return;
++  }
+   mPerformedDrag = NO;
+ 
+   nsAutoRetainCocoaObject kungFuDeathGrip(self);
+@@ -2619,6 +2923,9 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
+ 
+ - (void)rightMouseUp:(NSEvent*)theEvent {
+   NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
++  if ([mDirectTouchRecognizer shouldIgnoreMouseEvent:theEvent]) {
++    return;
++  }
+ 
+   if (!mGeckoChild) return;
+   if (mTextInputHandler->OnHandleEvent(theEvent)) {
+@@ -2657,6 +2964,9 @@ NSEvent* gLastDragMouseDownEvent = nil;  // [strong]
+ }
+ 
+ - (void)rightMouseDragged:(NSEvent*)theEvent {
++  if ([mDirectTouchRecognizer shouldIgnoreMouseEvent:theEvent]) {
++    return;
++  }
+   if (!mGeckoChild) return;
+   if (mTextInputHandler->OnHandleEvent(theEvent)) {
+     return;
+@@ -2681,6 +2991,9 @@ static bool ShouldDispatchBackForwardCommandForMouseButton(int16_t aButton) {
+ 
+ - (void)otherMouseDown:(NSEvent*)theEvent {
+   NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
++  if ([mDirectTouchRecognizer shouldIgnoreMouseEvent:theEvent]) {
++    return;
++  }
+   mPerformedDrag = NO;
+ 
+   nsAutoRetainCocoaObject kungFuDeathGrip(self);
+@@ -2718,6 +3031,9 @@ static bool ShouldDispatchBackForwardCommandForMouseButton(int16_t aButton) {
+ }
+ 
+ - (void)otherMouseUp:(NSEvent*)theEvent {
++  if ([mDirectTouchRecognizer shouldIgnoreMouseEvent:theEvent]) {
++    return;
++  }
+   if (!mGeckoChild) return;
+   if (mTextInputHandler->OnHandleEvent(theEvent)) {
+     return;
+@@ -2738,6 +3054,9 @@ static bool ShouldDispatchBackForwardCommandForMouseButton(int16_t aButton) {
+ }
+ 
+ - (void)otherMouseDragged:(NSEvent*)theEvent {
++  if ([mDirectTouchRecognizer shouldIgnoreMouseEvent:theEvent]) {
++    return;
++  }
+   if (!mGeckoChild) return;
+   if (mTextInputHandler->OnHandleEvent(theEvent)) {
+     return;
+diff --git a/widget/cocoa/nsLookAndFeel.mm b/widget/cocoa/nsLookAndFeel.mm
+index 2ac5408e38..6529c447f6 100644
+--- a/widget/cocoa/nsLookAndFeel.mm
++++ b/widget/cocoa/nsLookAndFeel.mm
+@@ -5,6 +5,7 @@
+ #include "mozilla/widget/ThemeChangeKind.h"
+ #include "nsLookAndFeel.h"
+ #include "nsCocoaFeatures.h"
++#include "nsCocoaUtils.h"
+ #include "nsNativeThemeColors.h"
+ #include "nsStyleConsts.h"
+ #include "nsIContent.h"
+@@ -426,6 +427,9 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
+     case IntID::ScrollArrowStyle:
+       aResult = eScrollArrow_None;
+       break;
++    case IntID::TouchDeviceSupportPresent:
++      aResult = nsCocoaUtils::HasTouchScreen() ? 1 : 0;
++      break;
+     case IntID::UseOverlayScrollbars:
+     case IntID::AllowOverlayScrollbarsOverlap:
+       aResult = NSScroller.preferredScrollerStyle == NSScrollerStyleOverlay;
